@@ -1,0 +1,291 @@
+	#!/usr/bin/env python3
+import json, os, socket, requests
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+PORT = 8000
+HOST = "0.0.0.0"
+API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
+
+# AI-suggested topics to mix into the feed
+TOPICS = [
+    "educational science explained short",
+    "productivity study tips short",
+    "history explained short",
+    "how things work engineering short",
+    "health neuroscience short",
+    "math explained short",
+    "philosophy explained short",
+    "economics explained short",
+]
+
+def fetch_ai_feed():
+    """Pull educational videos from YouTube Data API with embeddable filter."""
+    if not API_KEY:
+        return []
+    
+    all_videos = []
+    for topic in TOPICS:
+        url = "https://www.googleapis.com/youtube/v3/search"
+        params = {
+            "part": "snippet",
+            "q": topic,
+            "type": "video",
+            "maxResults": 3,
+            "videoEmbeddable": "true",  # CRITICAL: only embeddable videos
+            "safeSearch": "strict",
+            "relevanceLanguage": "en",
+            "videoDuration": "short",   # TikTok-style short videos
+            "key": API_KEY,
+        }
+        try:
+            r = requests.get(url, params=params, timeout=8)
+            data = r.json()
+            for item in data.get("items", []):
+                vid = item["id"]["videoId"]
+                snippet = item["snippet"]
+                all_videos.append({
+                    "id": vid,
+                    "title": snippet["title"],
+                    "channel": snippet["channelTitle"],
+                    "topic": snippet.get("description", topic)[:60] or topic,
+                })
+        except Exception:
+            pass
+    
+    # Deduplicate by video ID
+    seen = set()
+    unique = []
+    for v in all_videos:
+        if v["id"] not in seen:
+            seen.add(v["id"])
+            unique.append(v)
+    return unique
+
+
+def get_feed():
+    """Try AI feed first, fall back to curated list if API fails."""
+    ai_videos = fetch_ai_feed()
+    if ai_videos:
+        return ai_videos
+    
+    # Curated fallback (all known-embeddable)
+    return [
+        {"id": "aircAruvnKk", "title": "But what is a neural network?", "channel": "3Blue1Brown", "topic": "AI"},
+        {"id": "wjZofJX0v4M", "title": "The Immune System Explained", "channel": "Kurzgesagt", "topic": "Science"},
+        {"id": "Tc0HXbaZrK0", "title": "The Physics of Time", "channel": "Veritasium", "topic": "Physics"},
+        {"id": "8jPQjjsBbIc", "title": "How to Learn Anything Faster", "channel": "Jim Kwik", "topic": "Learning"},
+        {"id": "0e3GPea1Tyg", "title": "The History of the Entire World", "channel": "Bill Wurtz", "topic": "History"},
+    ]
+
+
+HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#000000">
+<title>EduFeed</title>
+<style>
+  :root {
+    --bg: #000; --text: #fff; --text-muted: rgba(255,255,255,0.7); --accent: #2dd4bf;
+    --safe-top: env(safe-area-inset-top, 0px); --safe-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; background: var(--bg); }
+  body { font-family: -apple-system, sans-serif; color: var(--text); overscroll-behavior: none; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+
+  #feed { height: 100dvh; overflow-y: scroll; scroll-snap-type: y mandatory; scroll-behavior: smooth; scrollbar-width: none; }
+  #feed::-webkit-scrollbar { display: none; }
+
+  .slide { height: 100dvh; scroll-snap-align: start; scroll-snap-stop: always; position: relative; background: #000; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  .slide iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+
+  .overlay { position: absolute; inset: 0; pointer-events: none; display: flex; flex-direction: column; justify-content: flex-end; padding: 20px; padding-bottom: calc(20px + var(--safe-bottom)); background: linear-gradient(to top, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0.3) 25%, transparent 50%); }
+  .meta { pointer-events: auto; max-width: 75%; }
+  .topic { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); margin-bottom: 6px; }
+  .title { font-size: 16px; font-weight: 600; line-height: 1.35; margin-bottom: 4px; }
+  .channel { font-size: 13px; color: var(--text-muted); }
+
+  .actions { position: absolute; right: 16px; bottom: calc(80px + var(--safe-bottom)); display: flex; flex-direction: column; gap: 24px; pointer-events: auto; }
+  .action { background: transparent; border: 0; color: var(--text); cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 11px; font-family: inherit; padding: 4px; }
+  .action svg { width: 32px; height: 32px; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5)); transition: transform 0.1s; }
+  .action:active svg { transform: scale(0.85); }
+  .action.on svg { color: var(--accent); fill: var(--accent); }
+
+  .topbar { position: absolute; top: 0; left: 0; right: 0; padding: calc(12px + var(--safe-top)) 16px 12px; display: flex; justify-content: center; pointer-events: none; z-index: 10; }
+  .refresh-btn { pointer-events: auto; background: rgba(0,0,0,0.6); backdrop-filter: blur(8px); color: var(--text); border: 1px solid rgba(255,255,255,0.15); padding: 8px 16px; border-radius: 20px; font-size: 13px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
+  .refresh-btn:active { transform: scale(0.95); }
+
+  .toast { position: fixed; bottom: calc(32px + var(--safe-bottom)); left: 50%; transform: translateX(-50%) translateY(20px); background: var(--accent); color: #000; padding: 12px 20px; border-radius: 24px; font-size: 13px; font-weight: 600; opacity: 0; transition: all 0.3s; pointer-events: none; z-index: 100; }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .loading { height: 100dvh; display: flex; align-items: center; justify-content: center; color: #888; font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <button class="refresh-btn" onclick="refreshFeed()">🔄 New AI Feed</button>
+</div>
+<div id="feed"><div class="loading">Loading AI feed…</div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const tag = document.createElement('script'); tag.src = "https://www.youtube.com/iframe_api"; document.head.appendChild(tag);
+
+let feedData = [], players = {}, activeIndex = 0;
+let savedVideos = new Set(JSON.parse(localStorage.getItem('saved_videos') || '[]'));
+let isTouch = window.matchMedia('(pointer: coarse)').matches;
+
+async function refreshFeed() {
+  const btn = document.querySelector('.refresh-btn');
+  btn.textContent = '⏳ Refreshing…';
+  try {
+    const res = await fetch('/api/feed');
+    feedData = await res.json();
+    renderFeed();
+    btn.textContent = '🔄 New AI Feed';
+    toast('Feed refreshed');
+  } catch(e) {
+    btn.textContent = '🔄 New AI Feed';
+    toast('Failed to refresh');
+  }
+}
+
+function renderFeed() {
+  const root = document.getElementById('feed');
+  root.innerHTML = feedData.map((v, i) => `
+    <section class="slide" data-index="${i}" data-id="${v.id}">
+      <div id="player-${i}"></div>
+      <div class="overlay">
+        <div class="meta">
+          <div class="topic">${v.topic}</div>
+          <div class="title">${v.title}</div>
+          <div class="channel">${v.channel}</div>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="action ${savedVideos.has(v.id)?'on':''}" data-save="${v.id}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+          <span>Save</span>
+        </button>
+      </div>
+    </section>
+  `).join('');
+
+  if (window.YT && window.YT.Player) initPlayers();
+  else window.onYouTubeIframeAPIReady = initPlayers;
+  
+  // Re-observe new slides
+  document.querySelectorAll('.slide').forEach(s => observer.observe(s));
+}
+
+function initPlayers() {
+  feedData.forEach((v, i) => {
+    const opts = {
+      height: '100%', width: '100%',
+      videoId: v.id,
+      playerVars: {
+        autoplay: isTouch ? 0 : 1,  // mobile: let user tap to play with sound
+        mute: isTouch ? 0 : 1,      // mobile: start unmuted
+        controls: isTouch ? 1 : 0,  // mobile: show YouTube native controls
+        playsinline: 1,
+        rel: 0,
+        modestbranding: 1,
+        fs: 0,
+        iv_load_policy: 3,
+      },
+      events: {
+        onReady: (e) => {
+          if (!isTouch) e.target.mute(); // desktop: mute for autoplay policy
+        },
+        onStateChange: (e) => {
+          if (e.data === YT.PlayerState.ENDED) {
+            e.target.seekTo(0); e.target.playVideo();
+          }
+        }
+      }
+    };
+    players[i] = new YT.Player(`player-${i}`, opts);
+  });
+}
+
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (!entry.isIntersecting) return;
+    const idx = parseInt(entry.target.dataset.index, 10);
+    if (idx === activeIndex) return;
+    activeIndex = idx;
+    
+    // Pause all others
+    Object.entries(players).forEach(([i, p]) => {
+      if (parseInt(i) !== idx) { try { p.pauseVideo(); } catch(e){} }
+    });
+    
+    // Play current
+    const current = players[idx];
+    if (current) {
+      try {
+        if (!isTouch) { current.mute(); current.playVideo(); }
+        // On touch, user taps native play button -> sound is on
+      } catch(e){}
+    }
+  });
+}, { threshold: 0.6 });
+
+document.addEventListener('click', (e) => {
+  const saveBtn = e.target.closest('[data-save]');
+  if (saveBtn) {
+    const id = saveBtn.dataset.save;
+    if (savedVideos.has(id)) { savedVideos.delete(id); saveBtn.classList.remove('on'); toast('Removed'); }
+    else { savedVideos.add(id); saveBtn.classList.add('on'); toast('Saved'); }
+    localStorage.setItem('saved_videos', JSON.stringify([...savedVideos]));
+  }
+});
+
+function toast(msg) {
+  const t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(t._t); t._t = setTimeout(() => t.classList.remove('show'), 1500);
+}
+
+// Boot
+refreshFeed();
+</script>
+</body>
+</html>"""
+
+
+class Handler(BaseHTTPRequestHandler):
+    def _send(self, code, body, ct="application/json"):
+        try:
+            self.send_response(code); self.send_header("Content-Type", ct)
+            self.send_header("Content-Length", str(len(body))); self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers(); self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError): pass
+
+    def do_GET(self):
+        if self.path == "/api/feed":
+            self._send(200, json.dumps(get_feed()).encode())
+        elif self.path in ("/", "/index.html"):
+            self._send(200, HTML.encode(), "text/html; charset=utf-8")
+        else:
+            self.send_response(404); self.end_headers()
+
+    def log_message(self, *a): pass
+
+
+if __name__ == "__main__":
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]; s.close()
+    except: local_ip = "127.0.0.1"
+    
+    print(f"\n✅ EduFeed running!")
+    print(f"🖥️  Mac:   http://localhost:{PORT}")
+    print(f"📱 Phone: http://{local_ip}:{PORT}")
+    if API_KEY:
+        print(f"\n✅ API Key loaded (ends in ...{API_KEY[-4:]})")
+    else:
+        print(f"\n⚠️  No API Key found. Using fallback videos.")
+        print(f"   Run: YOUTUBE_API_KEY=\"AIza...\" ~/daylog/venv/bin/python ~/daylog/feed.py\n")
+    HTTPServer((HOST, PORT), Handler).serve_forever()
