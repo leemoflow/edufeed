@@ -119,6 +119,12 @@ HTML = r"""<!DOCTYPE html>
   #feed::-webkit-scrollbar { display: none; }
   .slide { height: 100dvh; scroll-snap-align: start; scroll-snap-stop: always; position: relative; background: #000; overflow: hidden; }
   .slide iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  /* 🟢 CSS for Pseudo-Fullscreen */
+  body.fullscreen-mode #feed { overflow: hidden !important; }
+  body.fullscreen-mode .slide .overlay,
+  body.fullscreen-mode .slide .actions,
+  body.fullscreen-mode .slide .unmute-overlay,
+  body.fullscreen-mode .topbar { display: none !important; }
   .overlay { position: absolute; inset: 0; pointer-events: none; display: flex; flex-direction: column; justify-content: flex-end; padding: 20px; padding-bottom: calc(20px + var(--safe-bottom)); background: linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 50%); }
   .meta { pointer-events: auto; max-width: 70%; }
   .topic { font-size: 10px; font-weight: 700; text-transform: uppercase; color: var(--accent); margin-bottom: 4px; }
@@ -236,12 +242,23 @@ const observer = new IntersectionObserver((entries) => {
   });
 }, { threshold: 0.6 });
 
+// 🟢 New Pseudo-Fullscreen for iOS
+let isPseudoFullscreen = false;
 function toggleFullscreen(index) {
-  const player = players[index];
-  if (player && player.getIframe) {
-    const iframe = player.getIframe();
-    if (iframe.requestFullscreen) iframe.requestFullscreen();
-    else if (iframe.webkitRequestFullscreen) iframe.webkitRequestFullscreen();
+  isPseudoFullscreen = !isPseudoFullscreen;
+  
+  // Add or remove the CSS class
+  document.body.classList.toggle('fullscreen-mode', isPseudoFullscreen);
+  
+  // Update the button text
+  const btnText = document.querySelector(`.slide[data-index="${index}"] .action[onclick*="toggleFullscreen"] span`);
+  if (btnText) {
+    btnText.textContent = isPseudoFullscreen ? 'Close' : 'Expand';
+  }
+  
+  // If exiting pseudo-fullscreen, tell the video to play so it's not stuck
+  if (!isPseudoFullscreen) {
+     if (players[activeIndex]) players[activeIndex].playVideo();
   }
 }
 
