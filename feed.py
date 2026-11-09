@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json, os, socket, random, requests, re, collections
+from concurrent.futures import ThreadPoolExecutor
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
@@ -53,11 +54,16 @@ def fetch_ai_feed():
             channel_map = json.load(f)
     except: return []
     
-    selected = random.sample(list(channel_map.items()), min(10, len(channel_map)))
+    # Pick 6 random channels
+    selected = random.sample(list(channel_map.items()), min(6, len(channel_map)))
+    
+    # Fetch all 6 channels AT THE SAME TIME using threads
     all_videos = []
-    for name, channel_id in selected:
-        videos = fetch_channel_videos(channel_id, max_results=3)
-        all_videos.extend(videos)
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        results = list(executor.map(lambda c: fetch_channel_videos(c[1], max_results=3), selected))
+        
+    for result in results:
+        all_videos.extend(result)
     
     random.shuffle(all_videos)
     if not all_videos: return []
