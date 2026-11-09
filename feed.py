@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json, os, socket, random, requests, re
+import json, os, socket, random, requests, re, collections
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
@@ -23,16 +23,14 @@ def fetch_channel_videos(channel_id, max_results=5):
     }
     try:
         r = requests.get(url, params=params, timeout=8)
-        print(f"API response for {channel_id}: {r.status_code}")
         if r.status_code != 200:
-            print(f"API error body: {r.text[:200]}")
             return []
         data = r.json()
         videos = []
         for item in data.get("items", []):
             snippet = item["snippet"]
             title = snippet["title"]
-            # Block non-English titles
+            # Block non-English
             if re.search(r'[\u0600-\u06FF\u0400-\u04FF\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]', title):
                 continue
             videos.append({
@@ -43,25 +41,17 @@ def fetch_channel_videos(channel_id, max_results=5):
             })
         return videos
     except Exception as e:
-        print(f"Playlist error: {e}")
         return []
 
 def fetch_ai_feed():
-    if not API_KEY:
-        print("❌ NO API KEY FOUND IN ENVIRONMENT VARIABLES")
-        return []
-    
+    if not API_KEY: return []
     ids_file = Path(__file__).parent / "channel_ids.json"
-    if not ids_file.exists():
-        print("❌ channel_ids.json NOT FOUND")
-        return []
+    if not ids_file.exists(): return []
     
     try:
         with open(ids_file) as f:
             channel_map = json.load(f)
-    except Exception as e:
-        print(f"❌ JSON LOAD ERROR: {e}")
-        return []
+    except: return []
     
     selected = random.sample(list(channel_map.items()), min(10, len(channel_map)))
     all_videos = []
@@ -70,35 +60,24 @@ def fetch_ai_feed():
         all_videos.extend(videos)
     
     random.shuffle(all_videos)
-    
-    if not all_videos:
-        print("⚠️ API returned 0 videos. Check the API response codes above.")
-        return [{"id": "dQw4w9WgXcQ", "title": "Error: No videos fetched. Check Render logs.", "channel": "System", "topic": "Error"}]
+    if not all_videos: return []
         
     seen = set()
     unique = [v for v in all_videos if v["id"] not in seen and not seen.add(v["id"])]
     return unique[:30]
 
 def get_similar_videos(base_video):
-    import collections
     if not saved_videos_data: return []
-    
-    # Get all words from your saved titles
     corpus = " ".join([v['title'] for v in saved_videos_data]).lower()
     words = re.findall(r'\w+', corpus)
-    
-    # Filter out common boring words
     stopwords = {'the', 'and', 'for', 'with', 'this', 'that', 'from', 'your', 'what', 'how', 'why', 'are', 'you'}
     words = [w for w in words if w not in stopwords and len(w) > 3]
     
-    # Find the 2 most common keywords
     common = collections.Counter(words).most_common(2)
     keywords = [w[0] for w in common]
     
     if keywords:
         query = ' '.join(keywords)
-        print(f"🤖 Recommending based on keywords: {query}")
-        # Search YouTube for these keywords (1 quota unit)
         url = "https://www.googleapis.com/youtube/v3/search"
         params = {"part": "snippet", "q": query, "type": "video", "maxResults": 10, "key": API_KEY}
         try:
@@ -114,9 +93,7 @@ def get_similar_videos(base_video):
                     "topic": f"Similar to {base_video['channel']}"
                 })
             return videos
-        except Exception as e:
-            print(f"Search error: {e}")
-            
+        except: pass
     return []
 
 HTML = r"""<!DOCTYPE html>
@@ -257,11 +234,8 @@ function toggleFullscreen(index) {
   const player = players[index];
   if (player && player.getIframe) {
     const iframe = player.getIframe();
-    if (iframe.requestFullscreen) {
-      iframe.requestFullscreen();
-    } else if (iframe.webkitRequestFullscreen) {
-      iframe.webkitRequestFullscreen(); // iOS Safari fallback
-    }
+    if (iframe.requestFullscreen) iframe.requestFullscreen();
+    else if (iframe.webkitRequestFullscreen) iframe.webkitRequestFullscreen();
   }
 }
 
@@ -333,5 +307,5 @@ if __name__ == "__main__":
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.connect(("8.8.8.8", 80))
         local_ip = s.getsockname()[0]; s.close()
     except: local_ip = "127.0.0.1"
-    print(f"\n✅ EduFeed running!\n🖥️  Mac:   http://localhost:{PORT}\n📱 Phone: http://{local_ip}:{PORT}\n✅ API Key loaded: {'Yes' if API_KEY else 'No'}\n")
+    print(f"\n✅ EduFeed running on port {PORT}!\n")
     HTTPServer((HOST, PORT), Handler).serve_forever()
