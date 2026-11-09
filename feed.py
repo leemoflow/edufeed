@@ -208,6 +208,10 @@ function renderFeed() {
         </div>
       </div>
       <div class="actions">
+        <button class="action" onclick="toggleFullscreen(${i})">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+          <span>Expand</span>
+        </button>
         <button class="action ${savedVideos.has(v.id)?'on':''}" data-save="${v.id}">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
           <span>${savedVideos.has(v.id) ? 'More' : 'Save'}</span>
@@ -225,7 +229,7 @@ function initPlayers() {
   feedData.forEach((v, i) => {
     players[i] = new YT.Player(`player-${i}`, {
       videoId: v.id,
-      playerVars: { autoplay: 1, mute: 1, controls: 0, playsinline: 1, rel: 0, modestbranding: 1, fs: 0 },
+      playerVars: { autoplay: 1, mute: 1, controls: 0, playsinline: 1, rel: 0, modestbranding: 1, fs: 1 },
       events: { 
         onReady: (e) => { e.target.mute(); },
         onStateChange: (e) => { if (e.data === YT.PlayerState.ENDED) { e.target.seekTo(0); e.target.playVideo(); } }
@@ -248,6 +252,18 @@ const observer = new IntersectionObserver((entries) => {
     if (overlay) overlay.style.display = 'flex';
   });
 }, { threshold: 0.6 });
+
+function toggleFullscreen(index) {
+  const player = players[index];
+  if (player && player.getIframe) {
+    const iframe = player.getIframe();
+    if (iframe.requestFullscreen) {
+      iframe.requestFullscreen();
+    } else if (iframe.webkitRequestFullscreen) {
+      iframe.webkitRequestFullscreen(); // iOS Safari fallback
+    }
+  }
+}
 
 function unmuteCurrent() {
   const current = players[activeIndex];
