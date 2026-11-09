@@ -55,12 +55,12 @@ def fetch_ai_feed():
     except: return []
     
     # Pick 6 random channels
-    selected = random.sample(list(channel_map.items()), min(6, len(channel_map)))
+    selected = random.sample(list(channel_map.items()), min(5, len(channel_map)))
     
     # Fetch all 6 channels AT THE SAME TIME using threads
     all_videos = []
     with ThreadPoolExecutor(max_workers=6) as executor:
-        results = list(executor.map(lambda c: fetch_channel_videos(c[1], max_results=3), selected))
+        results = list(executor.map(lambda c: fetch_channel_videos(c[1], max_results=2), selected))
         
     for result in results:
         all_videos.extend(result)
@@ -119,12 +119,6 @@ HTML = r"""<!DOCTYPE html>
   #feed::-webkit-scrollbar { display: none; }
   .slide { height: 100dvh; scroll-snap-align: start; scroll-snap-stop: always; position: relative; background: #000; overflow: hidden; }
   .slide iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
-  /* 🟢 CSS for Pseudo-Fullscreen */
-  body.fullscreen-mode #feed { overflow: hidden !important; }
-  body.fullscreen-mode .slide .overlay,
-  body.fullscreen-mode .slide .actions,
-  body.fullscreen-mode .slide .unmute-overlay,
-  body.fullscreen-mode .topbar { display: none !important; }
   .overlay { position: absolute; inset: 0; pointer-events: none; display: flex; flex-direction: column; justify-content: flex-end; padding: 20px; padding-bottom: calc(20px + var(--safe-bottom)); background: linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 50%); }
   .meta { pointer-events: auto; max-width: 70%; }
   .topic { font-size: 10px; font-weight: 700; text-transform: uppercase; color: var(--accent); margin-bottom: 4px; }
@@ -140,12 +134,33 @@ HTML = r"""<!DOCTYPE html>
   .topbar { position: absolute; top: 0; left: 0; right: 0; padding: 16px; display: flex; justify-content: center; pointer-events: none; z-index: 10; }
   .refresh-btn { pointer-events: auto; background: rgba(0,0,0,0.6); backdrop-filter: blur(8px); color: var(--text); border: 1px solid rgba(255,255,255,0.15); padding: 8px 16px; border-radius: 20px; font-size: 13px; font-weight: 600; cursor: pointer; }
   .refresh-btn:active { transform: scale(0.95); }
+
+  .spinner {
+    width: 40px; height: 40px;
+    border: 3px solid rgba(255,255,255,0.1);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin: 0 auto 16px auto;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-screen {
+    position: fixed; inset: 0; background: var(--bg); z-index: 1000;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    transition: opacity 0.4s ease; color: var(--text-muted); font-size: 14px;
+  }
+  .loading-screen.hidden { opacity: 0; pointer-events: none; }
+
   .loading { height: 100dvh; display: flex; align-items: center; justify-content: center; color: #888; font-size: 14px; text-align: center; padding: 20px; }
 </style>
 </head>
 <body>
 <div class="topbar"><button class="refresh-btn" onclick="refreshFeed()">🔄 New AI Feed</button></div>
-<div id="feed"><div class="loading">Loading AI feed…</div></div>
+<div id="loading-screen" class="loading-screen">
+  <div class="spinner"></div>
+  <div id="loading-text">Waking up server...</div>
+</div>
+<div id="feed"></div>
 <script>
 const tag = document.createElement('script'); tag.src = "https://www.youtube.com/iframe_api"; document.head.appendChild(tag);
 let feedData = [], players = {}, activeIndex = 0;
@@ -153,14 +168,27 @@ let savedVideos = new Set(JSON.parse(localStorage.getItem('saved_videos') || '[]
 
 async function refreshFeed() {
   const btn = document.querySelector('.refresh-btn');
+  const loadingScreen = document.getElementById('loading-screen');
+  const loadingText = document.getElementById('loading-text');
+
   btn.textContent = '⏳ Refreshing…';
+  
+  if (feedData.length === 0) {
+    loadingScreen.classList.remove('hidden');
+    loadingText.textContent = "Fetching videos from YouTube...";
+  }
+
   try {
     const res = await fetch('/api/feed?t=' + Date.now());
     feedData = await res.json();
     renderFeed();
     btn.textContent = '🔄 New AI Feed';
     document.getElementById('feed').scrollTo(0, 0);
-  } catch(e) { btn.textContent = '🔄 New AI Feed'; }
+  } catch(e) { 
+    btn.textContent = '🔄 New AI Feed'; 
+  } finally {
+    loadingScreen.classList.add('hidden');
+  }
 }
 
 async function loadSimilar(videoId) {
@@ -197,10 +225,7 @@ function renderFeed() {
         </div>
       </div>
       <div class="actions">
-        <button class="action" onclick="toggleFullscreen(${i})">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
-          <span>Expand</span>
-        </button>
+
         <button class="action ${savedVideos.has(v.id)?'on':''}" data-save="${v.id}">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
           <span>${savedVideos.has(v.id) ? 'More' : 'Save'}</span>
