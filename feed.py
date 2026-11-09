@@ -151,6 +151,11 @@ HTML = r"""<!DOCTYPE html>
   }
   .loading-screen.hidden { opacity: 0; pointer-events: none; }
 
+
+  @media (pointer: coarse) {
+    .desktop-only { display: none !important; }
+  }
+
   .loading { height: 100dvh; display: flex; align-items: center; justify-content: center; color: #888; font-size: 14px; text-align: center; padding: 20px; }
 </style>
 </head>
@@ -284,6 +289,15 @@ function toggleFullscreen(index) {
   // If exiting pseudo-fullscreen, tell the video to play so it's not stuck
   if (!isPseudoFullscreen) {
      if (players[activeIndex]) players[activeIndex].playVideo();
+  }
+}
+
+function toggleFullscreen(index) {
+  const player = players[index];
+  if (player && player.getIframe) {
+    const iframe = player.getIframe();
+    if (iframe.requestFullscreen) iframe.requestFullscreen();
+    else if (iframe.webkitRequestFullscreen) iframe.webkitRequestFullscreen();
   }
 }
 
