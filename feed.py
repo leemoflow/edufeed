@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 import json, os, socket, random, requests, re
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 from pathlib import Path
 
 PORT = int(os.environ.get("PORT", 8000))
@@ -82,24 +80,43 @@ def fetch_ai_feed():
     return unique[:30]
 
 def get_similar_videos(base_video):
+    import collections
     if not saved_videos_data: return []
-    corpus = [f"{v['title']} {v['channel']} {v['topic']}" for v in saved_videos_data]
-    corpus.append(f"{base_video['title']} {base_video['channel']} {base_video['topic']}")
-    try:
-        vectorizer = TfidfVectorizer(stop_words='english', max_features=15)
-        tfidf_matrix = vectorizer.fit_transform(corpus)
-        cosine_sim = cosine_similarity(tfidf_matrix[-1], tfidf_matrix[:-1])
-        similar_indices = cosine_sim[0].argsort()[-3:][::-1]
-        keywords = []
-        for idx in similar_indices:
-            if cosine_sim[0][idx] > 0.1:
-                keywords.extend(saved_videos_data[idx]['title'].split()[:4])
-        if keywords:
-            query = ' '.join(set(keywords))
-            print(f"🤖 ML Recommending based on: {query}")
-            return fetch_channel_videos(base_video['id'], 10) # Just use the same channel for simplicity in fallback
-    except Exception as e:
-        print(f"ML Error: {e}")
+    
+    # Get all words from your saved titles
+    corpus = " ".join([v['title'] for v in saved_videos_data]).lower()
+    words = re.findall(r'\w+', corpus)
+    
+    # Filter out common boring words
+    stopwords = {'the', 'and', 'for', 'with', 'this', 'that', 'from', 'your', 'what', 'how', 'why', 'are', 'you'}
+    words = [w for w in words if w not in stopwords and len(w) > 3]
+    
+    # Find the 2 most common keywords
+    common = collections.Counter(words).most_common(2)
+    keywords = [w[0] for w in common]
+    
+    if keywords:
+        query = ' '.join(keywords)
+        print(f"🤖 Recommending based on keywords: {query}")
+        # Search YouTube for these keywords (1 quota unit)
+        url = "https://www.googleapis.com/youtube/v3/search"
+        params = {"part": "snippet", "q": query, "type": "video", "maxResults": 10, "key": API_KEY}
+        try:
+            r = requests.get(url, params=params, timeout=8)
+            data = r.json()
+            videos = []
+            for item in data.get("items", []):
+                snippet = item["snippet"]
+                videos.append({
+                    "id": item["id"]["videoId"],
+                    "title": snippet["title"],
+                    "channel": snippet["channelTitle"],
+                    "topic": f"Similar to {base_video['channel']}"
+                })
+            return videos
+        except Exception as e:
+            print(f"Search error: {e}")
+            
     return []
 
 HTML = r"""<!DOCTYPE html>
