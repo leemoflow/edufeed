@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-import json, os, socket, random, requests, re, re
+import json, os, socket, random, requests, re
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from pathlib import Path
 
 PORT = int(os.environ.get("PORT", 8000))
 HOST = "0.0.0.0"
@@ -10,70 +11,75 @@ API_KEY = os.environ.get("YOUTUBE_API_KEY", "")
 
 saved_videos_data = []
 
-def search_youtube(query, max_results=10):
-    if not API_KEY: return []
-    url = "https://www.googleapis.com/youtube/v3/search"
-    # We search for the channel name, order by date to get newest videos,
-    # and filter for medium/long videos to avoid Shorts and clickbait.
+def get_uploads_playlist_id(channel_id):
+    return "UU" + channel_id[2:]
+
+def fetch_channel_videos(channel_id, max_results=5):
+    playlist_id = get_uploads_playlist_id(channel_id)
+    url = "https://www.googleapis.com/youtube/v3/playlistItems"
     params = {
-        "part": "snippet", "q": query, "type": "video",
-        "maxResults": max_results, "videoEmbeddable": "true",
-        "safeSearch": "strict", "relevanceLanguage": "en",
-        "videoDuration": "medium", "order": "date", "key": API_KEY,
+        "part": "snippet",
+        "playlistId": playlist_id,
+        "maxResults": max_results,
+        "key": API_KEY
     }
     try:
         r = requests.get(url, params=params, timeout=8)
+        print(f"API response for {channel_id}: {r.status_code}")
+        if r.status_code != 200:
+            print(f"API error body: {r.text[:200]}")
+            return []
         data = r.json()
         videos = []
         for item in data.get("items", []):
             snippet = item["snippet"]
             title = snippet["title"]
-            
-            # 🚫 STRICT LANGUAGE FILTER: Skip if the title contains Arabic, Urdu, Cyrillic, Chinese, etc.
-            # This regex looks for characters in non-Latin Unicode blocks.
+            # Block non-English titles
             if re.search(r'[\u0600-\u06FF\u0400-\u04FF\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]', title):
                 continue
-                
             videos.append({
-                "id": item["id"]["videoId"], "title": title,
-                "channel": snippet["channelTitle"], "topic": query.title(),
+                "id": item["snippet"]["resourceId"]["videoId"],
+                "title": title,
+                "channel": snippet["channelTitle"],
+                "topic": "Your Channels"
             })
         return videos
     except Exception as e:
-        print(f"Search error: {e}")
+        print(f"Playlist error: {e}")
         return []
 
 def fetch_ai_feed():
-    if not API_KEY: return []
+    if not API_KEY:
+        print("❌ NO API KEY FOUND IN ENVIRONMENT VARIABLES")
+        return []
     
-    # Your exact subscription list
-    CHANNELS = [
-        "Gabriel Iglesias", "Throttle House", "Nouman Ali Khan", "Dr. Roy Casagranda",
-        "carwow", "Veritasium", "Art Chad", "Papersdock", "Yaqeen Institute",
-        "Johnny Harris", "Muslim Founder", "fern", "Mustard", "NullSpace",
-        "Real Time History", "Dr Israr Ahmed Official", "Gus Vidales", "Tavarish",
-        "Sahil Adeem", "A Simple Argument", "Hamza Yusuf", "OnePath Network",
-        "The Thinking Muslim", "Stargaze", "Damon Cassidy", "Let's Explore Our D",
-        "Youth Club", "Iman Gadzhi", "Kurzgesagt", "Edmund Yong", "Ustadh Rhyad",
-        "How Money Works", "Sammy Obeid"
-    ]
+    ids_file = Path(__file__).parent / "channel_ids.json"
+    if not ids_file.exists():
+        print("❌ channel_ids.json NOT FOUND")
+        return []
     
-    # Pick 10 random channels from the list
-    selected_channels = random.sample(CHANNELS, 10)
+    try:
+        with open(ids_file) as f:
+            channel_map = json.load(f)
+    except Exception as e:
+        print(f"❌ JSON LOAD ERROR: {e}")
+        return []
     
+    selected = random.sample(list(channel_map.items()), min(10, len(channel_map)))
     all_videos = []
-    for channel in selected_channels:
-        # Fetch only 3 videos per channel so the feed stays mixed
-        videos = search_youtube(channel, max_results=3)
+    for name, channel_id in selected:
+        videos = fetch_channel_videos(channel_id, max_results=3)
         all_videos.extend(videos)
-        
-    # Shuffle everything together so no two videos from the same channel play back-to-back
+    
     random.shuffle(all_videos)
     
-    # Remove duplicates (just in case) and return up to 25 videos
+    if not all_videos:
+        print("⚠️ API returned 0 videos. Check the API response codes above.")
+        return [{"id": "dQw4w9WgXcQ", "title": "Error: No videos fetched. Check Render logs.", "channel": "System", "topic": "Error"}]
+        
     seen = set()
     unique = [v for v in all_videos if v["id"] not in seen and not seen.add(v["id"])]
-    return unique[:25]
+    return unique[:30]
 
 def get_similar_videos(base_video):
     if not saved_videos_data: return []
@@ -91,7 +97,7 @@ def get_similar_videos(base_video):
         if keywords:
             query = ' '.join(set(keywords))
             print(f"🤖 ML Recommending based on: {query}")
-            return search_youtube(query, 10)
+            return fetch_channel_videos(base_video['id'], 10) # Just use the same channel for simplicity in fallback
     except Exception as e:
         print(f"ML Error: {e}")
     return []
@@ -128,7 +134,7 @@ HTML = r"""<!DOCTYPE html>
   .topbar { position: absolute; top: 0; left: 0; right: 0; padding: 16px; display: flex; justify-content: center; pointer-events: none; z-index: 10; }
   .refresh-btn { pointer-events: auto; background: rgba(0,0,0,0.6); backdrop-filter: blur(8px); color: var(--text); border: 1px solid rgba(255,255,255,0.15); padding: 8px 16px; border-radius: 20px; font-size: 13px; font-weight: 600; cursor: pointer; }
   .refresh-btn:active { transform: scale(0.95); }
-  .loading { height: 100dvh; display: flex; align-items: center; justify-content: center; color: #888; font-size: 14px; }
+  .loading { height: 100dvh; display: flex; align-items: center; justify-content: center; color: #888; font-size: 14px; text-align: center; padding: 20px; }
 </style>
 </head>
 <body>
@@ -170,6 +176,10 @@ async function loadSimilar(videoId) {
 
 function renderFeed() {
   const root = document.getElementById('feed');
+  if (!feedData || feedData.length === 0) {
+    root.innerHTML = '<div class="loading">⚠️ No videos found. Check Render logs.</div>';
+    return;
+  }
   root.innerHTML = feedData.map((v, i) => `
     <section class="slide" data-index="${i}" data-id="${v.id}" onclick="unmuteCurrent()">
       <div id="player-${i}"></div>
@@ -186,7 +196,7 @@ function renderFeed() {
           <span>${savedVideos.has(v.id) ? 'More' : 'Save'}</span>
         </button>
       </div>
-      <div class="unmute-overlay" onclick="unmuteCurrent()" style="display:none;">🔊 Tap anywhere to Unmute</div>
+      <div class="unmute-overlay" onclick="unmuteCurrent()" style="display:none;">🔊 Tap to Unmute</div>
     </section>
   `).join('');
   if (window.YT && window.YT.Player) initPlayers();
@@ -226,7 +236,7 @@ function unmuteCurrent() {
   const current = players[activeIndex];
   if (current && current.isMuted && current.isMuted()) {
     current.unMute();
-    current.playVideo(); // Force play just in case
+    current.playVideo();
     document.querySelectorAll('.unmute-overlay').forEach(el => el.style.display = 'none');
   }
 }
@@ -235,15 +245,14 @@ document.addEventListener('click', async (e) => {
   const saveBtn = e.target.closest('[data-save]');
   if (saveBtn) {
     const id = saveBtn.dataset.save;
-    const videoData = feedData.find(v => v.id === id);
-    
     if (savedVideos.has(id)) {
-      loadSimilar(id); // If already saved, clicking again loads ML recommendations
+      loadSimilar(id);
     } else {
       savedVideos.add(id);
       saveBtn.classList.add('on');
       saveBtn.querySelector('span').textContent = 'More';
       localStorage.setItem('saved_videos', JSON.stringify([...savedVideos]));
+      const videoData = feedData.find(v => v.id === id);
       try {
         await fetch('/api/save', {
           method: 'POST', headers: {'Content-Type': 'application/json'},
